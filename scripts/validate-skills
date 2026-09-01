@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repository_root=$(git rev-parse --show-toplevel)
+skills_root=$repository_root/skills
+status=0
+count=0
+
+while IFS= read -r skill_file; do
+  count=$((count + 1))
+  skill_dir=${skill_file%/SKILL.md}
+  folder_name=${skill_dir##*/}
+
+  first_line=$(sed -n '1p' "$skill_file")
+  closing_line=$(awk 'NR > 1 && $0 == "---" { print NR; exit }' "$skill_file")
+  declared_name=$(sed -n 's/^name:[[:space:]]*//p' "$skill_file" | head -1)
+  description=$(sed -n 's/^description:[[:space:]]*//p' "$skill_file" | head -1)
+
+  if [[ $first_line != '---' || -z $closing_line ]]; then
+    printf 'error: %s has invalid YAML frontmatter boundaries\n' "$skill_file" >&2
+    status=1
+  fi
+  if [[ $declared_name != "$folder_name" ]]; then
+    printf 'error: %s declares name %s; expected %s\n' \
+      "$skill_file" "$declared_name" "$folder_name" >&2
+    status=1
+  fi
+  if [[ -z $description ]]; then
+    printf 'error: %s has no single-line description\n' "$skill_file" >&2
+    status=1
+  fi
+  if grep -Eq 'TODO|FIXME|\[PLACEHOLDER\]' "$skill_file"; then
+    printf 'error: %s contains unfinished scaffold text\n' "$skill_file" >&2
+    status=1
+  fi
+  if [[ ! -x $skill_dir/scripts/git-${folder_name#git-} ]]; then
+    printf 'error: %s has no executable canonical operation\n' "$skill_dir" >&2
+    status=1
+  fi
+done < <(find "$skills_root" -mindepth 2 -maxdepth 2 -name SKILL.md -print | sort)
+
+((count > 0)) || {
+  printf 'error: no skills found under %s\n' "$skills_root" >&2
+  exit 1
+}
+
+if [[ $status -eq 0 ]]; then
+  printf 'Validated %s skill(s).\n' "$count"
+fi
+exit "$status"

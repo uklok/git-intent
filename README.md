@@ -74,3 +74,69 @@ use them.
 > **The agent chooses the operation. The operation owns the surgery.**
 
 This reduces improvisation without creating an agent-only Git abstraction.
+
+## Install `git fix-author`
+
+Install the reference operation somewhere on `PATH`:
+
+```console
+install -m 0755 \
+  skills/git-fix-author/scripts/git-fix-author \
+  "$HOME/.local/bin/git-fix-author"
+```
+
+Git discovers executables named `git-<command>`, so the installed program is
+available as either `git-fix-author` or `git fix-author`.
+
+Preview an inclusive rewrite range:
+
+```console
+git fix-author \
+  --start fix/author \
+  --finish feature/foo \
+  --name "AIPAL" \
+  --email "aipal@uklok.ai" \
+  --dry-run
+```
+
+Read [the operation guide](skills/git-fix-author/README.md) for behavior,
+limitations, recovery, and automation examples.
+
+## Project documents
+
+- [Philosophy](docs/philosophy.md)
+- [Architecture](docs/architecture.md)
+- [Operation contract](docs/operation-contract.md)
+- [Contributing](CONTRIBUTING.md)
+- [Security policy](SECURITY.md)
+
+## Develop and verify
+
+The test suite creates disposable repositories and proves the promised history
+invariants:
+
+```console
+scripts/test
+scripts/validate-skills
+```
+
+ShellCheck and shfmt are used in CI when available locally:
+
+```console
+shellcheck scripts/test scripts/validate-skills \
+  skills/git-fix-author/scripts/git-fix-author \
+  tests/git-fix-author/test.sh
+
+shfmt -d -i 2 -ci \
+  scripts/test scripts/validate-skills \
+  skills/git-fix-author/scripts/git-fix-author \
+  tests/git-fix-author/test.sh
+```
+
+## Status
+
+`git-fix-author` is the first reference implementation of the Git Intent
+operation contract. New operations should start from a real, repeatable Git
+problem whose intent is simple but whose safe execution requires careful work.
+
+Git Intent is licensed under the [MIT License](LICENSE).

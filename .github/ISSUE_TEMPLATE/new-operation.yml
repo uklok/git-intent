@@ -1,0 +1,59 @@
+name: Propose an operation
+description: Propose a reusable Git intent with explicit safety and recovery semantics.
+title: "feat(operation): "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        An operation belongs in Git Intent when its intent is common, its raw Git procedure is non-trivial or risky, and its behavior can have a clear safety and recovery contract.
+  - type: textarea
+    id: intent
+    attributes:
+      label: What is the Git intent?
+      description: Describe the desired outcome without specifying commands.
+    validations:
+      required: true
+  - type: textarea
+    id: risk
+    attributes:
+      label: Why is native execution error-prone?
+      description: Explain what makes humans or agents likely to get this wrong.
+    validations:
+      required: true
+  - type: textarea
+    id: existing
+    attributes:
+      label: Existing solutions
+      description: Which Git commands, projects, or libraries already solve some or all of it?
+    validations:
+      required: true
+  - type: textarea
+    id: safety
+    attributes:
+      label: Proposed safety contract
+      description: What must never change, and what preconditions should be enforced?
+    validations:
+      required: true
+  - type: textarea
+    id: recovery
+    attributes:
+      label: Recovery model
+      description: How can the operation be inspected, reversed, or recovered?
+    validations:
+      required: true
+  - type: textarea
+    id: verification
+    attributes:
+      label: Verification invariants
+      description: How can the operation prove that only the requested change occurred?
+    validations:
+      required: true
+  - type: textarea
+    id: fit
+    attributes:
+      label: Why Git Intent?
+      description: Why should this be an executable operation rather than documentation or an ordinary Git command?
+    validations:
+      required: true
