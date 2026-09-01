@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Integration tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - run: scripts/validate-skills
+      - run: scripts/test
+
+  lint:
+    name: Shell lint and format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+          cache: false
+      - name: Install linters
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes shellcheck
+          go install mvdan.cc/sh/v3/cmd/shfmt@v3.14.0
+      - name: ShellCheck
+        run: |
+          shellcheck \
+            scripts/test \
+            scripts/validate-skills \
+            skills/git-fix-author/scripts/git-fix-author \
+            tests/git-fix-author/test.sh
+      - name: shfmt
+        run: |
+          "$(go env GOPATH)/bin/shfmt" -d -i 2 -ci \
+            scripts/test \
+            scripts/validate-skills \
+            skills/git-fix-author/scripts/git-fix-author \
+            tests/git-fix-author/test.sh

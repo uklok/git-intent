@@ -1,0 +1,56 @@
+name: Bug report
+description: Report incorrect, unsafe, or confusing operation behavior.
+title: "fix: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not disclose a security-sensitive history-loss, injection, credential, or unintended-publication issue here. Follow SECURITY.md instead.
+  - type: input
+    id: operation
+    attributes:
+      label: Operation and version
+      placeholder: git-fix-author at commit ...
+    validations:
+      required: true
+  - type: textarea
+    id: intent
+    attributes:
+      label: Intended outcome
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: Use a disposable repository and remove sensitive data.
+    validations:
+      required: true
+  - type: textarea
+    id: observed
+    attributes:
+      label: Observed behavior
+    validations:
+      required: true
+  - type: textarea
+    id: safety
+    attributes:
+      label: Repository and recovery state
+      description: Was anything mutated, and was a recovery ref created?
+    validations:
+      required: true
+  - type: input
+    id: git-version
+    attributes:
+      label: Git version
+      placeholder: git version 2.x.y
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Operating system and shell
+    validations:
+      required: true
