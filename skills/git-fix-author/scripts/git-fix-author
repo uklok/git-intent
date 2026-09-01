@@ -1,0 +1,462 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+program=${0##*/}
+mode=${GFA_MODE:-auto}
+start=${GFA_START:-}
+finish=${GFA_FINISH:-}
+author_name=${GFA_NAME:-}
+author_email=${GFA_EMAIL:-}
+committer_name=${GFA_COMMITTER_NAME:-}
+committer_email=${GFA_COMMITTER_EMAIL:-}
+assume_yes=${GFA_YES:-0}
+dry_run=0
+make_backup=1
+update_refs=1
+
+usage() {
+  cat <<EOF
+Usage:
+  $program --start REF [--finish BRANCH] --name NAME --email EMAIL [options]
+
+Rewrite author and committer attribution from START (inclusive) through the
+local FINISH branch. File trees, commit messages, author/committer timestamps,
+empty commits, and merge topology are verified after the rewrite.
+
+Git user.name and user.email configuration are never modified. Signed commit
+signatures in the rewritten range cannot be preserved.
+
+Options:
+  -s, --start REF             First commit to rewrite (inclusive)
+  -f, --finish BRANCH         Local branch to rewrite through
+                              (default: current branch)
+  -n, --name NAME             Replacement author name
+  -e, --email EMAIL           Replacement author email
+      --committer-name NAME   Replacement committer name
+                              (default: same as author)
+      --committer-email EMAIL Replacement committer email
+                              (default: same as author)
+  -i, --interactive           Prompt for missing values
+      --non-interactive       Never prompt; missing values are errors
+  -y, --yes                   Skip the execution confirmation
+      --dry-run               Resolve and preview without mutation
+      --no-backup             Do not create a recovery ref
+      --update-refs           Update local branches whose tips are rewritten
+                              (default)
+      --no-update-refs        Update only the finish branch
+  -h, --help                  Show this help
+
+Environment:
+  GFA_START, GFA_FINISH, GFA_NAME, GFA_EMAIL
+  GFA_COMMITTER_NAME, GFA_COMMITTER_EMAIL
+  GFA_MODE                    auto | interactive | non-interactive
+  GFA_YES                     1 to skip confirmation
+
+Examples:
+  $program --start fix/author --finish feature/foo \
+    --name 'AIPAL' --email aipal@uklok.ai --dry-run
+
+  $program --start fix/author --finish feature/foo \
+    --name 'AIPAL' --email aipal@uklok.ai \
+    --committer-name 'Operator' --committer-email operator@example.com
+
+  GFA_START=fix/author GFA_FINISH=feature/foo GFA_NAME='AIPAL' \
+  GFA_EMAIL=aipal@uklok.ai $program --non-interactive --yes
+EOF
+}
+
+die() {
+  printf 'error: %s\n' "$*" >&2
+  exit 2
+}
+
+fail() {
+  printf 'error: %s\n' "$*" >&2
+  exit 1
+}
+
+lookup_new_oid() {
+  awk -v oid="$1" '$1 == oid { print $2; exit }' "$map_file"
+}
+
+contains_old_oid() {
+  grep -Fqx "$1" "$commit_file"
+}
+
+extract_commit_message() {
+  git cat-file commit "$1" |
+    {
+      while IFS= read -r header_line; do
+        [[ -n $header_line ]] || break
+      done
+      cat
+    } >"$2"
+}
+
+while (($#)); do
+  case $1 in
+    -s | --start)
+      [[ $# -ge 2 ]] || die "$1 requires a value"
+      start=$2
+      shift 2
+      ;;
+    -f | --finish)
+      [[ $# -ge 2 ]] || die "$1 requires a value"
+      finish=$2
+      shift 2
+      ;;
+    -n | --name)
+      [[ $# -ge 2 ]] || die "$1 requires a value"
+      author_name=$2
+      shift 2
+      ;;
+    -e | --email)
+      [[ $# -ge 2 ]] || die "$1 requires a value"
+      author_email=$2
+      shift 2
+      ;;
+    --committer-name)
+      [[ $# -ge 2 ]] || die "$1 requires a value"
+      committer_name=$2
+      shift 2
+      ;;
+    --committer-email)
+      [[ $# -ge 2 ]] || die "$1 requires a value"
+      committer_email=$2
+      shift 2
+      ;;
+    -i | --interactive)
+      mode=interactive
+      shift
+      ;;
+    --non-interactive)
+      mode=non-interactive
+      shift
+      ;;
+    -y | --yes)
+      assume_yes=1
+      shift
+      ;;
+    --dry-run)
+      dry_run=1
+      shift
+      ;;
+    --no-backup)
+      make_backup=0
+      shift
+      ;;
+    --update-refs)
+      update_refs=1
+      shift
+      ;;
+    --no-update-refs)
+      update_refs=0
+      shift
+      ;;
+    -h | --help)
+      usage
+      exit 0
+      ;;
+    *)
+      die "unknown option: $1"
+      ;;
+  esac
+done
+
+git rev-parse --git-dir >/dev/null 2>&1 || die "not inside a Git repository"
+
+case $mode in
+  interactive)
+    prompt=1
+    ;;
+  non-interactive)
+    prompt=0
+    ;;
+  auto)
+    if [[ -t 0 && -t 1 ]]; then
+      prompt=1
+    else
+      prompt=0
+    fi
+    ;;
+  *)
+    die "GFA_MODE must be auto, interactive, or non-interactive"
+    ;;
+esac
+
+current_branch=$(git symbolic-ref --quiet --short HEAD || true)
+[[ -n $finish ]] || finish=${current_branch:-HEAD}
+
+if [[ $prompt -eq 1 ]]; then
+  [[ -n $start ]] || read -r -p 'Start ref (inclusive): ' start
+  [[ -n $author_name ]] || read -r -p 'Author name: ' author_name
+  [[ -n $author_email ]] || read -r -p 'Author email: ' author_email
+fi
+
+[[ -n $start ]] || die "missing --start (or GFA_START)"
+[[ -n $author_name ]] || die "missing --name (or GFA_NAME)"
+[[ -n $author_email ]] || die "missing --email (or GFA_EMAIL)"
+
+case $author_name$author_email$committer_name$committer_email in
+  *$'\n'* | *$'\r'*) die "identity values must not contain newlines" ;;
+esac
+
+case $author_email in
+  *'<'* | *'>'*) die "author email must not contain angle brackets" ;;
+esac
+
+if [[ -n $committer_name || -n $committer_email ]]; then
+  [[ -n $committer_name ]] || die "--committer-name is required with --committer-email"
+  [[ -n $committer_email ]] || die "--committer-email is required with --committer-name"
+else
+  committer_name=$author_name
+  committer_email=$author_email
+fi
+
+case $committer_email in
+  *'<'* | *'>'*) die "committer email must not contain angle brackets" ;;
+esac
+
+case $finish in
+  HEAD)
+    [[ -n $current_branch ]] || die "HEAD is detached; pass --finish with a local branch"
+    finish_branch=$current_branch
+    ;;
+  refs/heads/*)
+    finish_branch=${finish#refs/heads/}
+    ;;
+  *)
+    finish_branch=$finish
+    ;;
+esac
+
+finish_ref=refs/heads/$finish_branch
+git show-ref --verify --quiet "$finish_ref" || die "--finish must name a local branch: $finish"
+
+start_oid=$(git rev-parse --verify "$start^{commit}" 2>/dev/null) || die "invalid start ref: $start"
+finish_oid=$(git rev-parse --verify "$finish_ref^{commit}" 2>/dev/null) || die "invalid finish: $finish"
+
+git merge-base --is-ancestor "$start_oid" "$finish_oid" ||
+  die "$start is not an ancestor of $finish_branch"
+
+parents_text=$(git show -s --format=%P "$start_oid")
+parents=()
+if [[ -n $parents_text ]]; then
+  read -r -a parents <<<"$parents_text"
+fi
+((${#parents[@]} <= 1)) || die "start commit is a merge; choose a non-merge start"
+
+[[ -z $(git status --porcelain) ]] ||
+  die "working tree/index is dirty; commit or stash changes first"
+
+printf 'start\nabort\n' | git update-ref --stdin >/dev/null 2>&1 ||
+  die "installed Git does not support transactional ref updates"
+
+temporary_root=${TMPDIR:-/tmp}
+temporary_dir=$(mktemp -d "$temporary_root/git-fix-author.XXXXXX") ||
+  fail "could not create temporary directory"
+trap 'rm -rf "$temporary_dir"' EXIT HUP INT TERM
+
+commit_file=$temporary_dir/commits
+map_file=$temporary_dir/map
+ref_file=$temporary_dir/refs
+transaction_file=$temporary_dir/transaction
+: >"$map_file"
+
+if ((${#parents[@]} == 0)); then
+  git rev-list --reverse --topo-order "$finish_oid" >"$commit_file"
+else
+  base_oid=${parents[0]}
+  git rev-list --reverse --topo-order "$base_oid..$finish_oid" >"$commit_file"
+fi
+
+grep -Fqx "$start_oid" "$commit_file" || fail "resolved range does not contain the start commit"
+commit_count=$(wc -l <"$commit_file" | tr -d ' ')
+((commit_count > 0)) || die "no commits found in requested range"
+
+{
+  printf '%s\t%s\n' "$finish_ref" "$finish_oid"
+  if [[ $update_refs -eq 1 ]]; then
+    git for-each-ref --format='%(refname)%09%(objectname)' refs/heads/ |
+      while IFS=$'\t' read -r ref oid; do
+        if contains_old_oid "$oid"; then
+          printf '%s\t%s\n' "$ref" "$oid"
+        fi
+      done
+  fi
+} | sort -u >"$ref_file"
+
+printf '\nAuthor rewrite preview\n'
+printf '%s\n' '----------------------'
+printf 'Start:       %s (%s)\n' "$start" "$(git rev-parse --short "$start_oid")"
+printf 'Finish:      %s (%s)\n' "$finish_branch" "$(git rev-parse --short "$finish_oid")"
+printf 'Commits:     %s\n' "$commit_count"
+printf 'Author:      %s <%s>\n' "$author_name" "$author_email"
+printf 'Committer:   %s <%s>\n' "$committer_name" "$committer_email"
+printf 'Checkpoint:  %s\n' "$([[ $make_backup -eq 1 ]] && printf 'enabled' || printf 'disabled')"
+printf 'Local refs:  %s\n\n' "$(wc -l <"$ref_file" | tr -d ' ')"
+
+while IFS= read -r preview_oid; do
+  git --no-pager show -s --format='  %h  %an <%ae>  %s' "$preview_oid"
+done <"$commit_file"
+
+printf '\nRefs that will move:\n'
+while IFS=$'\t' read -r ref oid; do
+  printf '  %s (%s)\n' "$ref" "$(git rev-parse --short "$oid")"
+done <"$ref_file"
+printf '\n'
+
+if [[ $dry_run -eq 1 ]]; then
+  printf 'Dry run only; nothing changed.\n'
+  exit 0
+fi
+
+if [[ $assume_yes != 1 ]]; then
+  [[ $prompt -eq 1 ]] || die "confirmation required; pass --yes in non-interactive mode"
+  read -r -p 'Rewrite these commits? [y/N] ' reply
+  case $reply in
+    y | Y | yes | YES) ;;
+    *)
+      printf 'Cancelled.\n'
+      exit 0
+      ;;
+  esac
+fi
+
+printf 'Reconstructing commits...\n'
+while IFS= read -r old_oid; do
+  tree_oid=$(git show -s --format=%T "$old_oid")
+  old_parents=$(git show -s --format=%P "$old_oid")
+  parent_args=()
+  if [[ -n $old_parents ]]; then
+    read -r -a parent_oids <<<"$old_parents"
+    for parent_oid in "${parent_oids[@]}"; do
+      new_parent=$(lookup_new_oid "$parent_oid")
+      parent_args+=("-p" "${new_parent:-$parent_oid}")
+    done
+  fi
+
+  message_file=$temporary_dir/message
+  extract_commit_message "$old_oid" "$message_file"
+  author_date=$(git show -s --format=%aI "$old_oid")
+  committer_date=$(git show -s --format=%cI "$old_oid")
+
+  if ((${#parent_args[@]} == 0)); then
+    new_oid=$(
+      GIT_AUTHOR_NAME=$author_name \
+        GIT_AUTHOR_EMAIL=$author_email \
+        GIT_AUTHOR_DATE=$author_date \
+        GIT_COMMITTER_NAME=$committer_name \
+        GIT_COMMITTER_EMAIL=$committer_email \
+        GIT_COMMITTER_DATE=$committer_date \
+        git -c commit.gpgSign=false commit-tree "$tree_oid" -F "$message_file"
+    ) || fail "could not reconstruct commit $old_oid"
+  else
+    new_oid=$(
+      GIT_AUTHOR_NAME=$author_name \
+        GIT_AUTHOR_EMAIL=$author_email \
+        GIT_AUTHOR_DATE=$author_date \
+        GIT_COMMITTER_NAME=$committer_name \
+        GIT_COMMITTER_EMAIL=$committer_email \
+        GIT_COMMITTER_DATE=$committer_date \
+        git -c commit.gpgSign=false commit-tree "$tree_oid" \
+        "${parent_args[@]}" -F "$message_file"
+    ) || fail "could not reconstruct commit $old_oid"
+  fi
+
+  printf '%s %s\n' "$old_oid" "$new_oid" >>"$map_file"
+done <"$commit_file"
+
+new_finish_oid=$(lookup_new_oid "$finish_oid")
+[[ -n $new_finish_oid ]] || fail "could not resolve the reconstructed finish commit"
+
+backup_ref=
+if [[ $make_backup -eq 1 ]]; then
+  backup_base=refs/backup/author-rewrite-$(date +%Y%m%d-%H%M%S)
+  backup_ref=$backup_base
+  suffix=0
+  while git show-ref --verify --quiet "$backup_ref"; do
+    suffix=$((suffix + 1))
+    backup_ref=$backup_base-$suffix
+  done
+  git update-ref "$backup_ref" "$finish_oid" || fail "could not create recovery ref"
+  printf 'Checkpoint: %s -> %s\n' "$backup_ref" "$(git rev-parse --short "$finish_oid")"
+fi
+
+{
+  printf 'start\n'
+  while IFS=$'\t' read -r ref old_ref_oid; do
+    new_ref_oid=$(lookup_new_oid "$old_ref_oid")
+    [[ -n $new_ref_oid ]] || fail "no reconstructed object for $ref"
+    printf 'update %s %s %s\n' "$ref" "$new_ref_oid" "$old_ref_oid"
+  done <"$ref_file"
+  printf 'prepare\ncommit\n'
+} >"$transaction_file"
+
+if ! git update-ref --stdin <"$transaction_file"; then
+  if [[ -n $backup_ref ]]; then
+    fail "ref update failed; original history remains at $backup_ref"
+  fi
+  fail "ref update failed before verification"
+fi
+
+printf 'Verifying invariants...\n'
+verification_failed=0
+verified_count=0
+while read -r old_oid new_oid; do
+  old_tree=$(git show -s --format=%T "$old_oid")
+  new_tree=$(git show -s --format=%T "$new_oid")
+  [[ $old_tree == "$new_tree" ]] || verification_failed=1
+
+  extract_commit_message "$old_oid" "$temporary_dir/old-message"
+  extract_commit_message "$new_oid" "$temporary_dir/new-message"
+  cmp -s "$temporary_dir/old-message" "$temporary_dir/new-message" || verification_failed=1
+
+  [[ $(git show -s --format=%aI "$old_oid") == "$(git show -s --format=%aI "$new_oid")" ]] ||
+    verification_failed=1
+  [[ $(git show -s --format=%cI "$old_oid") == "$(git show -s --format=%cI "$new_oid")" ]] ||
+    verification_failed=1
+  [[ $(git show -s --format=%an "$new_oid") == "$author_name" ]] || verification_failed=1
+  [[ $(git show -s --format=%ae "$new_oid") == "$author_email" ]] || verification_failed=1
+  [[ $(git show -s --format=%cn "$new_oid") == "$committer_name" ]] || verification_failed=1
+  [[ $(git show -s --format=%ce "$new_oid") == "$committer_email" ]] || verification_failed=1
+
+  expected_parents=
+  old_parents=$(git show -s --format=%P "$old_oid")
+  if [[ -n $old_parents ]]; then
+    read -r -a parent_oids <<<"$old_parents"
+    for parent_oid in "${parent_oids[@]}"; do
+      new_parent=$(lookup_new_oid "$parent_oid")
+      expected_parents=${expected_parents:+$expected_parents }${new_parent:-$parent_oid}
+    done
+  fi
+  [[ $(git show -s --format=%P "$new_oid") == "$expected_parents" ]] || verification_failed=1
+  verified_count=$((verified_count + 1))
+done <"$map_file"
+
+[[ $verified_count -eq $commit_count ]] || verification_failed=1
+[[ $(git rev-parse "$finish_ref") == "$new_finish_oid" ]] || verification_failed=1
+if [[ -n $backup_ref ]]; then
+  [[ $(git rev-parse "$backup_ref") == "$finish_oid" ]] || verification_failed=1
+fi
+
+if [[ $verification_failed -ne 0 ]]; then
+  if [[ -n $backup_ref ]]; then
+    fail "verification failed; original history remains at $backup_ref"
+  fi
+  fail "verification failed and --no-backup was requested"
+fi
+
+printf '\nDone.\n'
+printf '[ok] %s commits rewritten\n' "$commit_count"
+printf '[ok] trees, messages, timestamps, and topology preserved\n'
+printf '[ok] requested author and committer identities applied\n'
+printf 'New tip: %s (%s)\n' "$finish_branch" "$(git rev-parse --short "$new_finish_oid")"
+if [[ -n $backup_ref ]]; then
+  printf 'Original history: %s\n' "$backup_ref"
+fi
+printf '\nThis operation changed local refs only.\n'
+printf 'Inspect before publishing:\n'
+printf "  git --no-pager log --format='%%h  %%an <%%ae>  %%cn <%%ce>  %%s'\n"
+printf 'If the finish branch was already published:\n'
+printf '  git push --force-with-lease origin %s\n' "$finish_branch"
