@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+unset GFA_START GFA_FINISH GFA_NAME GFA_EMAIL \
+  GFA_COMMITTER_NAME GFA_COMMITTER_EMAIL GFA_MODE GFA_YES GFA_CURRENT_BRANCH
+
 repository_root=$(git rev-parse --show-toplevel)
 tool=$repository_root/skills/git-fix-author/scripts/git-fix-author
 test_root=$(mktemp -d "${TMPDIR:-/tmp}/git-fix-author-tests.XXXXXX")
@@ -103,6 +106,15 @@ test_help() {
   assert_contains "$output" 'Usage:' 'help shows usage'
   assert_contains "$output" '--non-interactive' 'help documents automation'
   assert_contains "$output" '--no-update-refs' 'help documents ref scope'
+  assert_contains "$output" '--current-branch' 'help documents current-branch start'
+  assert_contains "$output" 'GFA_CURRENT_BRANCH' 'help documents current-branch env'
+}
+
+publish_origin_main() {
+  repo=$1
+  oid=$2
+  git -C "$repo" update-ref refs/remotes/origin/main "$oid"
+  git -C "$repo" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main
 }
 
 test_linear_rewrite_and_backup() {
@@ -334,6 +346,143 @@ test_rejections() {
   assert_eq "$(cd "$repo" && backup_count)" '0' 'rejections create no backup'
 }
 
+test_current_branch_feature_vs_origin_main() {
+  repo=$test_root/current-branch-feature
+  new_repo "$repo"
+  commit_file "$repo" file.txt base base '2025-01-01T10:00:00Z'
+  root_oid=$(git -C "$repo" rev-parse HEAD)
+  publish_origin_main "$repo" "$root_oid"
+  git -C "$repo" checkout -q -b feature
+  commit_file "$repo" file.txt one feature-one '2025-01-02T10:00:00Z'
+  commit_file "$repo" file.txt two feature-two '2025-01-03T10:00:00Z'
+
+  output=$(cd "$repo" && "$tool" --current-branch --name Feature \
+    --email feature@example.com --dry-run --non-interactive)
+  assert_contains "$output" 'Commits:     2' 'feature unique range excludes origin/main'
+
+  (cd "$repo" && "$tool" --current-branch --name Feature \
+    --email feature@example.com --non-interactive --yes >/dev/null)
+
+  assert_eq "$(git -C "$repo" show -s --format='%an <%ae>' "$root_oid")" \
+    'Configured User <configured@example.com>' 'integration tip is untouched'
+  assert_eq "$(git -C "$repo" log --reverse --format='%an <%ae>' origin/main..HEAD | sort -u)" \
+    'Feature <feature@example.com>' 'unique feature commits are rewritten'
+  assert_eq "$(git -C "$repo" rev-list --count origin/main..HEAD)" '2' \
+    'rewrite stays bounded to unique commits'
+}
+
+test_current_branch_main_rewrites_unpushed_only() {
+  repo=$test_root/current-branch-main
+  new_repo "$repo"
+  commit_file "$repo" file.txt root root '2025-01-01T10:00:00Z'
+  root_oid=$(git -C "$repo" rev-parse HEAD)
+  publish_origin_main "$repo" "$root_oid"
+  commit_file "$repo" file.txt one unpushed-one '2025-01-02T10:00:00Z'
+  commit_file "$repo" file.txt two unpushed-two '2025-01-03T10:00:00Z'
+
+  output=$(cd "$repo" && "$tool" --current-branch --name Local \
+    --email local@example.com --dry-run --non-interactive)
+  assert_contains "$output" 'Commits:     2' 'default branch unique range is unpushed only'
+
+  (cd "$repo" && "$tool" --current-branch --name Local \
+    --email local@example.com --non-interactive --yes >/dev/null)
+
+  assert_eq "$(git -C "$repo" show -s --format='%an <%ae>' "$root_oid")" \
+    'Configured User <configured@example.com>' 'published main is not rewritten from root'
+  assert_eq "$(git -C "$repo" log --reverse --format='%an <%ae>' origin/main..HEAD | sort -u)" \
+    'Local <local@example.com>' 'unpushed main commits are rewritten'
+}
+
+test_current_branch_feature_vs_local_main() {
+  repo=$test_root/current-branch-local-main
+  new_repo "$repo"
+  commit_file "$repo" file.txt base base '2025-01-01T10:00:00Z'
+  root_oid=$(git -C "$repo" rev-parse HEAD)
+  git -C "$repo" checkout -q -b feature
+  commit_file "$repo" file.txt feat feature '2025-01-02T10:00:00Z'
+
+  (cd "$repo" && "$tool" --current-branch --name Feature \
+    --email feature@example.com --non-interactive --yes >/dev/null)
+
+  assert_eq "$(git -C "$repo" show -s --format='%an <%ae>' "$root_oid")" \
+    'Configured User <configured@example.com>' 'local main remains the integration boundary'
+  assert_eq "$(git -C "$repo" show -s --format='%an <%ae>' HEAD)" \
+    'Feature <feature@example.com>' 'unique commit versus local main is rewritten'
+}
+
+test_current_branch_env_flag() {
+  repo=$test_root/current-branch-env
+  new_repo "$repo"
+  commit_file "$repo" file.txt base base '2025-01-01T10:00:00Z'
+  root_oid=$(git -C "$repo" rev-parse HEAD)
+  publish_origin_main "$repo" "$root_oid"
+  git -C "$repo" checkout -q -b feature
+  commit_file "$repo" file.txt feat feature '2025-01-02T10:00:00Z'
+
+  output=$(cd "$repo" && GFA_CURRENT_BRANCH=1 "$tool" --name Env \
+    --email env@example.com --dry-run --non-interactive)
+  assert_contains "$output" 'Commits:     1' 'GFA_CURRENT_BRANCH selects unique range'
+}
+
+test_current_branch_rejections() {
+  repo=$test_root/current-branch-rejections
+  new_repo "$repo"
+  commit_file "$repo" file.txt base base '2025-01-01T10:00:00Z'
+  root_oid=$(git -C "$repo" rev-parse HEAD)
+
+  in_sync_output=$test_root/current-branch-in-sync
+  publish_origin_main "$repo" "$root_oid"
+  if (cd "$repo" && "$tool" --current-branch --name Author \
+    --email author@example.com --dry-run --non-interactive \
+    >"$in_sync_output" 2>&1); then
+    return 1
+  fi
+  assert_contains "$(<"$in_sync_output")" 'no unique commits' \
+    'in-sync default branch does not rewrite from root'
+
+  exclusive_output=$test_root/current-branch-exclusive
+  git -C "$repo" checkout -q -b feature
+  commit_file "$repo" file.txt feat feature '2025-01-02T10:00:00Z'
+  if (cd "$repo" && "$tool" --current-branch --start "$root_oid" --name Author \
+    --email author@example.com --dry-run --non-interactive \
+    >"$exclusive_output" 2>&1); then
+    return 1
+  fi
+  assert_contains "$(<"$exclusive_output")" 'mutually exclusive' \
+    '--current-branch rejects an explicit start'
+
+  env_exclusive=$test_root/current-branch-env-exclusive
+  if (cd "$repo" && GFA_START=$root_oid GFA_CURRENT_BRANCH=1 "$tool" \
+    --name Author --email author@example.com --dry-run --non-interactive \
+    >"$env_exclusive" 2>&1); then
+    return 1
+  fi
+  assert_contains "$(<"$env_exclusive")" 'mutually exclusive' \
+    'GFA_CURRENT_BRANCH rejects GFA_START'
+
+  git -C "$repo" checkout -q --detach HEAD
+  detached_output=$test_root/current-branch-detached
+  if (cd "$repo" && "$tool" --current-branch --name Author \
+    --email author@example.com --dry-run --non-interactive \
+    >"$detached_output" 2>&1); then
+    return 1
+  fi
+  assert_contains "$(<"$detached_output")" 'HEAD is detached' \
+    'detached HEAD is rejected'
+
+  no_integration=$test_root/current-branch-no-integration
+  new_repo "$no_integration"
+  commit_file "$no_integration" file.txt only root '2025-01-01T10:00:00Z'
+  missing_output=$test_root/current-branch-missing-integration
+  if (cd "$no_integration" && "$tool" --current-branch --name Author \
+    --email author@example.com --dry-run --non-interactive \
+    >"$missing_output" 2>&1); then
+    return 1
+  fi
+  assert_contains "$(<"$missing_output")" 'cannot resolve an integration branch' \
+    'main without origin does not rewrite from the repo root'
+}
+
 printf 'TAP version 13\n'
 run_test 'help documents the public interface' test_help
 run_test 'linear rewrite verifies history and creates recovery' test_linear_rewrite_and_backup
@@ -345,6 +494,11 @@ run_test 'no-update-refs limits ref mutation' test_no_update_refs
 run_test 'bounded rewrite can target a non-current branch' test_bounded_range_on_another_branch
 run_test 'non-ancestor ranges are rejected without mutation' test_nonancestor_is_rejected
 run_test 'unsafe and incomplete requests are rejected' test_rejections
+run_test 'current branch unique range versus origin/main' test_current_branch_feature_vs_origin_main
+run_test 'current branch on main rewrites unpushed commits only' test_current_branch_main_rewrites_unpushed_only
+run_test 'current branch can use local main as integration' test_current_branch_feature_vs_local_main
+run_test 'GFA_CURRENT_BRANCH selects the unique range' test_current_branch_env_flag
+run_test 'current-branch preconditions are rejected without mutation' test_current_branch_rejections
 
 total=$((passed + failed))
 printf '1..%s\n' "$total"

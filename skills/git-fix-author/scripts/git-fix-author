@@ -10,14 +10,20 @@ author_email=${GFA_EMAIL:-}
 committer_name=${GFA_COMMITTER_NAME:-}
 committer_email=${GFA_COMMITTER_EMAIL:-}
 assume_yes=${GFA_YES:-0}
+current_branch_mode=0
 dry_run=0
 make_backup=1
 update_refs=1
+
+case ${GFA_CURRENT_BRANCH:-0} in
+  1 | true | TRUE | yes | YES | on | ON) current_branch_mode=1 ;;
+esac
 
 usage() {
   cat <<EOF
 Usage:
   $program --start REF [--finish BRANCH] --name NAME --email EMAIL [options]
+  $program --current-branch --name NAME --email EMAIL [options]
 
 Rewrite author and committer attribution from START (inclusive) through the
 local FINISH branch. File trees, commit messages, author/committer timestamps,
@@ -28,6 +34,12 @@ signatures in the rewritten range cannot be preserved.
 
 Options:
   -s, --start REF             First commit to rewrite (inclusive)
+      --current-branch        Start at the first unique commit on the
+                              current branch versus the integration line
+                              (origin/HEAD, origin/main, or local main).
+                              Mutually exclusive with --start. Fails on
+                              detached HEAD or when there are no unique
+                              commits (does not rewrite from the repo root)
   -f, --finish BRANCH         Local branch to rewrite through
                               (default: current branch)
   -n, --name NAME             Replacement author name
@@ -51,6 +63,7 @@ Environment:
   GFA_COMMITTER_NAME, GFA_COMMITTER_EMAIL
   GFA_MODE                    auto | interactive | non-interactive
   GFA_YES                     1 to skip confirmation
+  GFA_CURRENT_BRANCH          1 to select --current-branch
 
 Examples:
   $program --start fix/author --finish feature/foo \
@@ -62,6 +75,9 @@ Examples:
 
   GFA_START=fix/author GFA_FINISH=feature/foo GFA_NAME='AIPAL' \
   GFA_EMAIL=aipal@uklok.ai $program --non-interactive --yes
+
+  GFA_NAME='AIPAL' GFA_EMAIL=aipal@uklok.ai \
+    $program --current-branch --non-interactive --yes
 EOF
 }
 
@@ -73,6 +89,51 @@ die() {
 fail() {
   printf 'error: %s\n' "$*" >&2
   exit 1
+}
+
+resolve_integration_ref() {
+  local current=$1
+  local ref short
+
+  if ref=$(git symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null); then
+    printf '%s\n' "$ref"
+    return 0
+  fi
+
+  for short in origin/main origin/master; do
+    if git rev-parse --verify "${short}^{commit}" >/dev/null 2>&1; then
+      printf '%s\n' "$short"
+      return 0
+    fi
+  done
+
+  for short in main master; do
+    if [[ $short != "$current" ]] && git show-ref --verify --quiet "refs/heads/$short"; then
+      printf '%s\n' "refs/heads/$short"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+resolve_current_branch_start() {
+  local current=$1
+  local integration integration_oid start_from integration_name
+
+  integration=$(resolve_integration_ref "$current") ||
+    die "cannot resolve an integration branch for --current-branch; fetch origin or pass --start"
+  integration_oid=$(git rev-parse --verify "${integration}^{commit}" 2>/dev/null) ||
+    die "cannot resolve an integration branch for --current-branch; fetch origin or pass --start"
+
+  local -a unique_commits=()
+  mapfile -t unique_commits < <(git rev-list --reverse --topo-order "$integration_oid..HEAD")
+  start_from=${unique_commits[0]:-}
+  integration_name=${integration#refs/remotes/}
+  integration_name=${integration_name#refs/heads/}
+  [[ -n $start_from ]] ||
+    die "no unique commits on the current branch relative to $integration_name"
+  printf '%s\n' "$start_from"
 }
 
 lookup_new_oid() {
@@ -99,6 +160,10 @@ while (($#)); do
       [[ $# -ge 2 ]] || die "$1 requires a value"
       start=$2
       shift 2
+      ;;
+    --current-branch)
+      current_branch_mode=1
+      shift
       ;;
     -f | --finish)
       [[ $# -ge 2 ]] || die "$1 requires a value"
@@ -187,13 +252,26 @@ esac
 current_branch=$(git symbolic-ref --quiet --short HEAD || true)
 [[ -n $finish ]] || finish=${current_branch:-HEAD}
 
+if [[ $current_branch_mode -eq 1 ]]; then
+  [[ -z $start ]] || die "--current-branch is mutually exclusive with --start (or GFA_START)"
+  [[ -n $current_branch ]] || die "HEAD is detached; --current-branch requires a checked-out branch"
+  case $finish in
+    HEAD | "$current_branch" | "refs/heads/$current_branch") ;;
+    *)
+      die "--current-branch rewrites the current branch; omit --finish"
+      ;;
+  esac
+  finish=$current_branch
+  start=$(resolve_current_branch_start "$current_branch")
+fi
+
 if [[ $prompt -eq 1 ]]; then
   [[ -n $start ]] || read -r -p 'Start ref (inclusive): ' start
   [[ -n $author_name ]] || read -r -p 'Author name: ' author_name
   [[ -n $author_email ]] || read -r -p 'Author email: ' author_email
 fi
 
-[[ -n $start ]] || die "missing --start (or GFA_START)"
+[[ -n $start ]] || die "missing --start, --current-branch, or GFA_START"
 [[ -n $author_name ]] || die "missing --name (or GFA_NAME)"
 [[ -n $author_email ]] || die "missing --email (or GFA_EMAIL)"
 
