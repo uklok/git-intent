@@ -47,8 +47,20 @@ git fix-author \
   --yes
 ```
 
+To rewrite only the unique commits on the current branch versus the
+integration line (`origin/HEAD`, `origin/main`, or local `main`), pass
+`--current-branch` instead of `--start`. That range is the first unique
+commit through `HEAD`. On the default branch it is unpushed commits only;
+it never falls back to the repository root. The flag fails on detached
+`HEAD` and when there are no unique commits. It is mutually exclusive
+with `--start`.
+
+```console
+git fix-author --current-branch --non-interactive --yes
+```
+
 All primary values also have `GFA_*` environment equivalents documented by
-`--help`.
+`--help`. `GFA_CURRENT_BRANCH=1` selects `--current-branch`.
 
 ## Identity semantics
 

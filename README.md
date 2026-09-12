@@ -40,6 +40,9 @@ git fix-author \
   --email "aipal@uklok.ai"
 ```
 
+When the intent is "the unique commits on this branch", pass
+`--current-branch` instead of computing `--start`.
+
 Every mutating operation follows the same model:
 
 ```text
