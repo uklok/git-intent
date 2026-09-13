@@ -19,6 +19,14 @@ This includes the start, finish, and merge-side commits within that graph.
 
 For a root start, every commit reachable from the finish branch is rebuilt.
 
+`--current-branch` selects the oldest commit reachable from `HEAD` but not
+from the integration line (`origin/HEAD`, then `origin/main` /
+`origin/master`, then a local `main` / `master` that is not the current
+branch). On the default branch that is the unpushed range versus
+`origin/main`. The operation refuses to run when that set is empty or
+when no integration line exists, instead of widening to the repository
+root.
+
 A merge commit cannot be the start because selecting one parent as the excluded
 boundary would silently choose semantics the caller did not express. Merges
 inside the resolved graph remain supported.

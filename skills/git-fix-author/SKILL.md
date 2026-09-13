@@ -11,8 +11,11 @@ request.
 
 ## Workflow
 
-1. Confirm that rewriting published history is acceptable and identify the
-   inclusive start commit and local finish branch.
+1. Confirm that rewriting published history is acceptable. Prefer
+   `--current-branch` so the operation resolves the first unique commit
+   on the current branch versus the integration line. Pass `--start`
+   only when that range is the wrong boundary. The finish branch defaults
+   to the current branch.
 2. Preserve unrelated user work. The executable rejects a dirty repository; do
    not silently stash, reset, or discard changes to bypass that precondition.
 3. Inspect `scripts/git-fix-author --help` and run `--dry-run` with the intended
