@@ -35,6 +35,13 @@ ln -sf "$PWD/skills/git-fix-author/scripts/git-fix-author" \
 
 Git exposes `git-fix-author` as `git fix-author`.
 
+Verify that the symlink resolves to an executable operation:
+
+```console
+command -v git-fix-author
+git fix-author --help
+```
+
 ## Preview, then execute
 
 ```console

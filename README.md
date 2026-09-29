@@ -112,6 +112,13 @@ ln -sf "$PWD/skills/git-fix-author/scripts/git-fix-author" \
 Git discovers executables named `git-<command>`, so the installed program is
 available as either `git-fix-author` or `git fix-author`.
 
+Verify that the symlink resolves to an executable operation:
+
+```console
+command -v git-fix-author
+git fix-author --help
+```
+
 Preview an inclusive rewrite range:
 
 ```console
