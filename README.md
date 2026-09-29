@@ -80,7 +80,15 @@ This reduces improvisation without creating an agent-only Git abstraction.
 
 ## Install `git fix-author`
 
-Install the reference operation somewhere on `PATH`:
+Install or update the reference operation on `PATH`:
+
+```console
+mkdir -p "$HOME/.local/bin" && curl -fsSL \
+  https://raw.githubusercontent.com/uklok/git-intent/main/skills/git-fix-author/scripts/git-fix-author \
+  -o "$HOME/.local/bin/git-fix-author" && chmod 0755 "$HOME/.local/bin/git-fix-author"
+```
+
+The same command updates an existing install. From a local checkout:
 
 ```console
 install -m 0755 \

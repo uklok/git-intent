@@ -4,7 +4,15 @@ Safely repair author and committer attribution across an inclusive commit range.
 
 ## Install
 
-Copy the canonical executable to a directory on `PATH`:
+Install or update the canonical executable on `PATH`:
+
+```console
+mkdir -p "$HOME/.local/bin" && curl -fsSL \
+  https://raw.githubusercontent.com/uklok/git-intent/main/skills/git-fix-author/scripts/git-fix-author \
+  -o "$HOME/.local/bin/git-fix-author" && chmod 0755 "$HOME/.local/bin/git-fix-author"
+```
+
+The same command updates an existing install. From a local checkout:
 
 ```console
 install -m 0755 \
