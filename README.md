@@ -80,19 +80,32 @@ This reduces improvisation without creating an agent-only Git abstraction.
 
 ## Install `git fix-author`
 
-Install or update the reference operation on `PATH`:
+Install the skill the same way as any other community skill:
 
 ```console
-mkdir -p "$HOME/.local/bin" && curl -fsSL \
-  https://raw.githubusercontent.com/uklok/git-intent/main/skills/git-fix-author/scripts/git-fix-author \
-  -o "$HOME/.local/bin/git-fix-author" && chmod 0755 "$HOME/.local/bin/git-fix-author"
+npx skills add uklok/git-intent -g
 ```
 
-The same command updates an existing install. From a local checkout:
+The installed skill root remains the source of truth. Expose the same executable
+on `PATH` with a symlink; do not copy it:
 
 ```console
-install -m 0755 \
-  skills/git-fix-author/scripts/git-fix-author \
+mkdir -p "$HOME/.local/bin"
+ln -sf "$HOME/.agents/skills/git-fix-author/scripts/git-fix-author" \
+  "$HOME/.local/bin/git-fix-author"
+```
+
+Update the skill in place. The symlink keeps resolving to the same file:
+
+```console
+npx skills update git-fix-author -g
+```
+
+From a local checkout, symlink the tree instead of copying:
+
+```console
+mkdir -p "$HOME/.local/bin"
+ln -sf "$PWD/skills/git-fix-author/scripts/git-fix-author" \
   "$HOME/.local/bin/git-fix-author"
 ```
 
