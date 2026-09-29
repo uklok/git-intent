@@ -37,8 +37,8 @@ The README is human-facing packaging documentation. The skill entry point stays
 compact and routes to references only when their details affect a decision.
 
 The executable is the single implementation source. Human installation exposes
-the same `git-<operation>` file on `PATH`, where Git discovers it as
-`git <operation>`.
+that same file on `PATH` with a symlink into the installed skill root, where Git
+discovers it as `git <operation>`.
 
 ## Stable contracts, replaceable engines
 
@@ -60,4 +60,4 @@ shared need before common machinery is extracted.
 
 The repository is a collection of independently useful Agent Skills. Existing
 skill ecosystems can distribute them; Git Intent does not operate a separate
-marketplace.
+marketplace. The community install is `npx skills add uklok/git-intent`.
